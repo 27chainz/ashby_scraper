@@ -11,53 +11,158 @@ SIMPLIFY_SOURCES = [
     "https://raw.githubusercontent.com/SimplifyJobs/Summer2025-Internships/dev/.github/scripts/listings.json",
 ]
 
-MANUAL_COMPANY_SLUGS = {
+MANUAL_ASHBY_SLUGS = {
     "griffin", "ramp", "brex", "linear", "vanta", "multiverse", "synthesia",
     "elevenlabs", "mistral", "cohere", "qdrant", "figma", "retool", "resend",
     "posthog", "checkly", "fly-io", "render", "clerk", "dub", "cal-com"
 }
 
+MANUAL_GREENHOUSE_SLUGS = {
+    "monzo", "revolut", "stripe", "deliveroo", "starlingbank", "klarna", "n26",
+    "wise", "oaknorth", "checkout", "zepz", "gocardless", "doordash", "robinhood",
+    "coinbase", "plaid", "gusto", "chime", "affirm"
+}
 
-async def discover_company_slugs():
-    slugs = set(MANUAL_COMPANY_SLUGS)
+MANUAL_LEVER_SLUGS = {
+    "palantir", "spotify", "scaleai", "airtable", "datadog", "dropbox",
+    "atlassian", "cloudflare"
+}
+
+
+def strip_html(html_text: str):
+    if not html_text:
+        return ""
+    text = re.sub(r'<[^>]+>', ' ', html_text)
+    return ' '.join(text.split())
+
+
+async def discover_all_ats_slugs():
+    ashby = set(MANUAL_ASHBY_SLUGS)
+    greenhouse = set(MANUAL_GREENHOUSE_SLUGS)
+    lever = set(MANUAL_LEVER_SLUGS)
+
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
         for url in SIMPLIFY_SOURCES:
             try:
                 r = await client.get(url)
                 if r.status_code == 200:
-                    raw = re.findall(r"jobs\.ashbyhq\.com/([^/\s\"'\\]+)", r.text)
-                    for s in raw:
-                        slugs.add(urllib.parse.unquote(s))
+                    text = r.text
+                    ashby.update(urllib.parse.unquote(s) for s in re.findall(r"jobs\.ashbyhq\.com/([^/\s\"'\\\?]+)", text))
+                    greenhouse.update(urllib.parse.unquote(s) for s in re.findall(r"boards\.greenhouse\.io/([^/\s\"'\\\?]+)", text))
+                    greenhouse.update(urllib.parse.unquote(s) for s in re.findall(r"boards\.eu\.greenhouse\.io/([^/\s\"'\\\?]+)", text))
+                    lever.update(urllib.parse.unquote(s) for s in re.findall(r"jobs\.lever\.co/([^/\s\"'\\\?]+)", text))
             except Exception:
                 pass
-    return slugs
+    return ashby, greenhouse, lever
 
 
-async def fetch_jobs_for_company(client: httpx.AsyncClient, slug: str):
+async def fetch_ashby_jobs(client: httpx.AsyncClient, slug: str):
     try:
         r = await client.get(f"https://api.ashbyhq.com/posting-api/job-board/{slug}")
         if r.status_code == 200:
             jobs = r.json().get("jobs", [])
-            for job in jobs:
-                job["company"] = slug
-            return jobs
+            normalized = []
+            for j in jobs:
+                normalized.append({
+                    "company": slug,
+                    "title": j.get("title", ""),
+                    "department": j.get("department") or "General",
+                    "location": str(j.get("location") or "Unspecified"),
+                    "jobUrl": j.get("jobUrl"),
+                    "descriptionPlain": (j.get("descriptionPlain") or "")[:1200],
+                    "isRemote": j.get("isRemote", False),
+                    "workplaceType": j.get("workplaceType", ""),
+                    "ats": "Ashby"
+                })
+            return normalized
     except Exception:
         pass
     return []
 
 
-async def fetch_all_jobs_chunked(slugs: set, chunk_size: int = 50):
-    slug_list = list(slugs)
-    all_jobs = []
-    limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
+async def fetch_greenhouse_jobs(client: httpx.AsyncClient, slug: str):
+    try:
+        r = await client.get(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true")
+        if r.status_code == 200:
+            jobs = r.json().get("jobs", [])
+            normalized = []
+            for j in jobs:
+                depts = j.get("departments", [])
+                dept_name = depts[0].get("name") if depts else "General"
+                location_name = j.get("location", {}).get("name") if isinstance(j.get("location"), dict) else str(j.get("location") or "Unspecified")
+                normalized.append({
+                    "company": slug,
+                    "title": j.get("title", ""),
+                    "department": dept_name or "General",
+                    "location": location_name,
+                    "jobUrl": j.get("absolute_url"),
+                    "descriptionPlain": strip_html(j.get("content", ""))[:1200],
+                    "isRemote": "remote" in location_name.lower(),
+                    "workplaceType": "remote" if "remote" in location_name.lower() else "onsite",
+                    "ats": "Greenhouse"
+                })
+            return normalized
+    except Exception:
+        pass
+    return []
 
-    async with httpx.AsyncClient(limits=limits, timeout=httpx.Timeout(6.0)) as client:
-        for i in range(0, len(slug_list), chunk_size):
-            chunk = slug_list[i:i + chunk_size]
-            tasks = [fetch_jobs_for_company(client, slug) for slug in chunk]
+
+async def fetch_lever_jobs(client: httpx.AsyncClient, slug: str):
+    try:
+        r = await client.get(f"https://api.lever.co/v0/postings/{slug}?mode=json")
+        if r.status_code == 200:
+            jobs = r.json()
+            if isinstance(jobs, list):
+                normalized = []
+                for j in jobs:
+                    cats = j.get("categories", {}) or {}
+                    location_name = cats.get("location") or "Unspecified"
+                    workplace = j.get("workplaceType") or ""
+                    normalized.append({
+                        "company": slug,
+                        "title": j.get("text", ""),
+                        "department": cats.get("department") or "General",
+                        "location": location_name,
+                        "jobUrl": j.get("hostedUrl"),
+                        "descriptionPlain": (j.get("descriptionPlain") or "")[:1200],
+                        "isRemote": "remote" in location_name.lower() or workplace.lower() == "remote",
+                        "workplaceType": workplace,
+                        "ats": "Lever"
+                    })
+                return normalized
+    except Exception:
+        pass
+    return []
+
+
+async def fetch_all_ats_jobs(ashby_slugs: set, gh_slugs: set, lever_slugs: set, chunk_size: int = 50):
+    all_jobs = []
+    limits = httpx.Limits(max_keepalive_connections=100, max_connections=150)
+
+    async with httpx.AsyncClient(limits=limits, timeout=httpx.Timeout(8.0)) as client:
+        ashby_list = list(ashby_slugs)
+        for i in range(0, len(ashby_list), chunk_size):
+            chunk = ashby_list[i:i + chunk_size]
+            tasks = [fetch_ashby_jobs(client, s) for s in chunk]
             results = await asyncio.gather(*tasks)
-            for job_list in results:
-                all_jobs.extend(job_list)
+            for jlist in results:
+                all_jobs.extend(jlist)
+
+        gh_list = list(gh_slugs)
+        for i in range(0, len(gh_list), chunk_size):
+            chunk = gh_list[i:i + chunk_size]
+            tasks = [fetch_greenhouse_jobs(client, s) for s in chunk]
+            results = await asyncio.gather(*tasks)
+            for jlist in results:
+                all_jobs.extend(jlist)
+
+        lever_list = list(lever_slugs)
+        for i in range(0, len(lever_list), chunk_size):
+            chunk = lever_list[i:i + chunk_size]
+            tasks = [fetch_lever_jobs(client, s) for s in chunk]
+            results = await asyncio.gather(*tasks)
+            for jlist in results:
+                all_jobs.extend(jlist)
 
     return all_jobs
 
@@ -243,7 +348,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AshbyHQ Universal Career Search Engine</title>
+    <title>Unified Multi-ATS Startup Career Engine (Ashby + Greenhouse + Lever)</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -578,6 +683,27 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             font-size: 0.78rem;
         }}
 
+        .ats-ashby {{
+            background: rgba(139, 92, 246, 0.2);
+            color: #c4b5fd;
+            border: 1px solid rgba(139, 92, 246, 0.5);
+            font-weight: 800;
+        }}
+
+        .ats-greenhouse {{
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.5);
+            font-weight: 800;
+        }}
+
+        .ats-lever {{
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.5);
+            font-weight: 800;
+        }}
+
         .stage-intern-badge {{
             background: rgba(236, 72, 153, 0.2);
             color: #f472b6;
@@ -783,8 +909,8 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
     <div class="container">
         <header>
             <div class="logo-title">
-                <h1>AshbyHQ Universal Career Search Engine</h1>
-                <p>Scouring live jobs across {total_companies} company boards matched against Grant Flores Akuoko's CV (Languages: English, Dutch)</p>
+                <h1>Unified Multi-ATS Startup Career Engine</h1>
+                <p>Scouring live jobs across {total_companies} company boards (Ashby + Greenhouse + Lever) matched against Grant Flores Akuoko's CV</p>
             </div>
         </header>
 
@@ -801,8 +927,8 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 <div class="stat-label">Total Jobs Scanned</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="appliedCount">0</div>
-                <div class="stat-label">Applications Submitted</div>
+                <div class="stat-value">{total_companies:,}</div>
+                <div class="stat-label">Active Startup Boards</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="showingCount">0</div>
@@ -817,7 +943,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
         <div class="filter-panel">
             <div class="search-row">
                 <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="Search by title, company, skill, city, department (e.g. Griffin, Intern, Placement, SDR, London)..." oninput="renderFilteredJobs()">
+                    <input type="text" id="searchInput" placeholder="Search by title, company, skill, city, department (e.g. Monzo, Revolut, Griffin, Intern, SDR, London)..." oninput="renderFilteredJobs()">
                 </div>
                 <select id="sortSelect" class="sort-select" onchange="renderFilteredJobs()">
                     <option value="score-desc">Sort: Highest Match Score</option>
@@ -827,6 +953,16 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             </div>
 
             <div class="filter-row">
+                <div>
+                    <div class="filter-group-title">ATS Job Board Provider</div>
+                    <div class="tag-group" id="atsChips">
+                        <span class="filter-chip active-green" data-ats="all" onclick="toggleAtsFilter('all', this)">🌍 All ATS Platforms (Ashby + Greenhouse + Lever)</span>
+                        <span class="filter-chip" data-ats="Ashby" onclick="toggleAtsFilter('Ashby', this)">🟣 AshbyHQ</span>
+                        <span class="filter-chip" data-ats="Greenhouse" onclick="toggleAtsFilter('Greenhouse', this)">🟢 Greenhouse</span>
+                        <span class="filter-chip" data-ats="Lever" onclick="toggleAtsFilter('Lever', this)">🔵 Lever</span>
+                    </div>
+                </div>
+
                 <div>
                     <div class="filter-group-title">Language Compatibility</div>
                     <div class="tag-group" id="langChips">
@@ -906,6 +1042,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
     <script>
         const allJobs = {jobs_json};
         let currentTab = 'feed';
+        let activeAts = 'all';
         let activeLang = 'matched';
         let activeStage = 'entry';
         let activeCountry = 'all';
@@ -958,6 +1095,14 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             renderFilteredJobs();
         }}
 
+        function toggleAtsFilter(atsMode, el) {{
+            document.querySelectorAll('#atsChips .filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
+            if (atsMode === 'all') el.classList.add('active-green');
+            else el.classList.add('active');
+            activeAts = atsMode;
+            renderFilteredJobs();
+        }}
+
         function toggleLangFilter(langMode, el) {{
             document.querySelectorAll('#langChips .filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
             if (langMode === 'matched') el.classList.add('active-green');
@@ -998,6 +1143,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
         function resetAllFilters() {{
             document.getElementById('searchInput').value = '';
             document.getElementById('sortSelect').value = 'score-desc';
+            activeAts = 'all';
             activeLang = 'matched';
             activeStage = 'entry';
             activeCountry = 'all';
@@ -1005,6 +1151,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             minScore = 0;
 
             document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
+            document.querySelector('#atsChips [data-ats="all"]').classList.add('active-green');
             document.querySelector('#langChips [data-lang="matched"]').classList.add('active-green');
             document.querySelector('#stageChips [data-stage="entry"]').classList.add('active-green');
             document.querySelector('#countryChips [data-country="all"]').classList.add('active');
@@ -1029,7 +1176,6 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 
             document.getElementById('appliedBadgeCount').innerText = appliedCount;
             document.getElementById('savedBadgeCount').innerText = savedCount;
-            document.getElementById('appliedCount').innerText = appliedCount;
 
             let filtered = allJobs.filter(job => {{
                 const jobId = job.company + '_' + job.title;
@@ -1039,6 +1185,8 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 if (currentTab === 'applied' && status !== 'applied') return false;
                 if (currentTab === 'saved' && status !== 'saved') return false;
                 if (currentTab === 'archived' && status !== 'archived') return false;
+
+                if (activeAts !== 'all' && job.ats !== activeAts) return false;
 
                 if (activeLang === 'matched' && job.unsupported_langs && job.unsupported_langs.length > 0) return false;
 
@@ -1082,7 +1230,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             const grid = document.getElementById('jobsGrid');
             grid.innerHTML = '';
 
-            filtered.slice(0, 150).forEach(job => {{
+            filtered.slice(0, 200).forEach(job => {{
                 const jobId = job.company + '_' + job.title;
                 const status = statusMap[jobId] || 'feed';
                 const card = document.createElement('div');
@@ -1092,12 +1240,17 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 if (job.score >= 85) matchClass = 'match-emerald';
                 else if (job.score >= 70) matchClass = 'match-blue';
 
+                let atsBadgeClass = 'ats-ashby';
+                if (job.ats === 'Greenhouse') atsBadgeClass = 'ats-greenhouse';
+                if (job.ats === 'Lever') atsBadgeClass = 'ats-lever';
+
                 let stageBadgeClass = 'stage-mid-badge';
                 if (job.stage_code === 'intern') stageBadgeClass = 'stage-intern-badge';
                 if (job.stage_code === 'entry') stageBadgeClass = 'stage-entry-badge';
                 if (job.stage_code === 'senior') stageBadgeClass = 'stage-senior-badge';
                 if (job.stage_code === 'exec') stageBadgeClass = 'stage-exec-badge';
 
+                const atsBadge = `<span class="tag ${{atsBadgeClass}}">${{job.ats}}</span>`;
                 const stageBadge = `<span class="tag ${{stageBadgeClass}}">${{job.stage_badge}}</span>`;
 
                 let modeBadge = `<span class="tag mode-onsite-badge">🏛️ On-Site</span>`;
@@ -1128,6 +1281,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                         </div>
                         <div class="meta-tags">
                             ${{statusBadge}}
+                            ${{atsBadge}}
                             ${{stageBadge}}
                             ${{modeBadge}}
                             ${{expBadge}}
@@ -1162,12 +1316,13 @@ def main():
     if "dutch" in cv_text.lower():
         user_languages.add("dutch")
 
-    print("Discovering active AshbyHQ company boards...")
-    slugs = asyncio.run(discover_company_slugs())
-    print(f"Discovered {len(slugs)} active companies on AshbyHQ.")
+    print("Discovering active company boards across Ashby, Greenhouse & Lever...")
+    ashby_slugs, gh_slugs, lever_slugs = asyncio.run(discover_all_ats_slugs())
+    total_boards = len(ashby_slugs) + len(gh_slugs) + len(lever_slugs)
+    print(f"Discovered {total_boards} total company boards ({len(ashby_slugs)} Ashby, {len(gh_slugs)} Greenhouse, {len(lever_slugs)} Lever).")
 
-    print(f"Fetching open positions from all {len(slugs)} boards...")
-    all_jobs = asyncio.run(fetch_all_jobs_chunked(slugs))
+    print(f"Fetching open positions from all {total_boards} boards in parallel...")
+    all_jobs = asyncio.run(fetch_all_ats_jobs(ashby_slugs, gh_slugs, lever_slugs))
     print(f"Fetched {len(all_jobs)} open positions in total.\n")
 
     jobs_data = []
@@ -1179,6 +1334,7 @@ def main():
             "department": job.get("department") or "General",
             "location": str(job.get("location") or "Unspecified"),
             "url": job.get("jobUrl"),
+            "ats": job.get("ats"),
             "score": score,
             "matched_tags": tags,
             "country": country,
@@ -1195,11 +1351,11 @@ def main():
     jobs_data.sort(key=lambda x: x["score"], reverse=True)
 
     output_path = Path("job_dashboard.html")
-    html = build_dashboard_html(jobs_data, len(slugs), len(all_jobs))
+    html = build_dashboard_html(jobs_data, total_boards, len(all_jobs))
     output_path.write_text(html, encoding="utf-8")
 
     print("==========================================================")
-    print(" 🚀 UNIVERSAL SEARCH DASHBOARD: job_dashboard.html        ")
+    print(" 🚀 UNIFIED MULTI-ATS STARTUP ENGINE: job_dashboard.html  ")
     print("==========================================================\n")
     print(f"Opening dashboard in your web browser...")
     webbrowser.open(f"file://{output_path.resolve()}")

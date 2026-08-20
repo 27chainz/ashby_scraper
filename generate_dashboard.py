@@ -85,6 +85,49 @@ def classify_workplace(job: dict):
     return "On-Site / In-Office", "onsite"
 
 
+def classify_career_stage(title: str, full_text: str, years_num):
+    title_lower = title.lower()
+
+    exec_patterns = [
+        r"\bvp\b", r"\bvice president\b", r"\bdirector\b", r"\bhead of\b", r"\bchief\b",
+        r"\bexecutive\b", r"\bc-suite\b", r"\bpartner\b", r"\bpresident\b"
+    ]
+    if any(re.search(pat, title_lower) for pat in exec_patterns):
+        return "Executive & Director", "exec", "👑 Exec & Director"
+
+    student_patterns = [
+        r"\bintern\b", r"\binternship\b", r"\bplacement\b", r"\bco-op\b", r"\bcoop\b",
+        r"\bworking student\b", r"\bstudent\b", r"\bapprentice\b", r"\bapprenticeship\b"
+    ]
+    if any(re.search(pat, title_lower) for pat in student_patterns) and "internal" not in title_lower and "international" not in title_lower:
+        return "Internship / Student", "intern", "🎓 Intern & Placement"
+
+    senior_patterns = [
+        r"\bsenior\b", r"\bsr\.\b", r"\bsr\b", r"\bstaff\b", r"\bprincipal\b", r"\blead\b", r"\bmanager\b"
+    ]
+    if any(re.search(pat, title_lower) for pat in senior_patterns):
+        return "Senior Level", "senior", "👔 Senior Level"
+
+    entry_patterns = [
+        r"\bjunior\b", r"\bassociate\b", r"\bgraduate\b", r"\bnew grad\b", r"\bbdr\b", r"\bsdr\b",
+        r"\btrainee\b", r"\bassistant\b", r"\bentry level\b", r"\bentry-level\b"
+    ]
+    if any(re.search(pat, title_lower) for pat in entry_patterns):
+        return "Entry-Level / Junior", "entry", "🌱 Entry-Level"
+
+    if years_num is not None:
+        if years_num <= 2:
+            return "Entry-Level / Junior", "entry", "🌱 Entry-Level"
+        elif years_num <= 5:
+            return "Mid-Level", "mid", "💼 Mid-Level"
+        elif years_num <= 8:
+            return "Senior Level", "senior", "👔 Senior Level"
+        else:
+            return "Executive & Director", "exec", "👑 Exec & Director"
+
+    return "Mid-Level", "mid", "💼 Mid-Level"
+
+
 def parse_job_metadata(job: dict):
     title = job.get("title", "") or ""
     description = job.get("descriptionPlain", "") or ""
@@ -124,53 +167,34 @@ def parse_job_metadata(job: dict):
         exp_text = "0-1 yrs (Entry Level)"
         years_num = 0
 
-    return country, workplace_label, workplace_code, exp_text, years_num
+    stage_label, stage_code, stage_badge = classify_career_stage(title, full_text, years_num)
+
+    return country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge
 
 
 def calculate_match_details(cv_keywords: set, job: dict):
     title = job.get("title", "")
     description = job.get("descriptionPlain", "")
     job_text = f"{title} {description}".lower()
-    title_lower = title.lower()
 
-    country, workplace_label, workplace_code, exp_text, years_num = parse_job_metadata(job)
-
-    senior_patterns = [
-        r"\bvp\b", r"\bvice president\b", r"\bdirector\b", r"\bhead of\b", r"\bchief\b",
-        r"\bexecutive\b", r"\bprincipal\b", r"\bpartner\b", r"\bsenior\b", r"\bsr\.\b", r"\bsr\b", r"\blead\b"
-    ]
-    is_senior = any(re.search(pat, title_lower) for pat in senior_patterns) or (years_num is not None and years_num >= 5)
-
-    student_patterns = [
-        r"\bintern\b", r"\binternship\b", r"\bplacement\b", r"\bco-op\b", r"\bcoop\b",
-        r"\bworking student\b", r"\bstudent\b", r"\bapprentice\b", r"\bapprenticeship\b"
-    ]
-    has_student_term = any(re.search(pat, title_lower) for pat in student_patterns)
-    is_student_intern = has_student_term and not is_senior and "internal" not in title_lower and "international" not in title_lower
-
-    early_patterns = [
-        r"\bbdr\b", r"\bsdr\b", r"\bbusiness development representative\b", r"\bsales development representative\b",
-        r"\bjunior\b", r"\bassociate\b", r"\banalyst\b", r"\bgraduate\b", r"\bnew grad\b", r"\btrainee\b", r"\bentry level\b", r"\bassistant\b"
-    ]
-    has_early_term = any(re.search(pat, title_lower) for pat in early_patterns)
-    is_early_career = (is_student_intern or (has_early_term and not is_senior) or (years_num is not None and years_num <= 2)) and not is_senior
+    country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge = parse_job_metadata(job)
 
     if not cv_keywords:
-        return 0.0, [], False, False, country, workplace_label, workplace_code, exp_text, years_num
+        return 0.0, [], country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge
 
     matched = [kw for kw in cv_keywords if kw in job_text and len(kw) > 3]
-    title_matches = [kw for kw in cv_keywords if kw in title_lower and len(kw) > 3]
+    title_matches = [kw for kw in cv_keywords if kw in title.lower() and len(kw) > 3]
 
     score = (len(matched) / len(cv_keywords)) * 100
     if title_matches:
         score += len(title_matches) * 10
 
-    if is_early_career:
+    if stage_code in ["entry", "intern"]:
         score += 15.0
 
     score = min(round(score, 1), 100.0)
     matched_tags = list(set(title_matches + matched))[:5]
-    return score, matched_tags, is_early_career, is_student_intern, country, workplace_label, workplace_code, exp_text, years_num
+    return score, matched_tags, country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge
 
 
 def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int):
@@ -181,7 +205,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AshbyHQ Precision Career Engine</title>
+    <title>AshbyHQ Wellfound-Grade Career Engine</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -516,18 +540,39 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             font-size: 0.78rem;
         }}
 
-        .student-badge {{
+        .stage-intern-badge {{
             background: rgba(236, 72, 153, 0.2);
             color: #f472b6;
             border: 1px solid rgba(236, 72, 153, 0.5);
             font-weight: 700;
         }}
 
-        .early-badge {{
+        .stage-entry-badge {{
             background: rgba(16, 185, 129, 0.2);
             color: #34d399;
             border: 1px solid rgba(16, 185, 129, 0.5);
             font-weight: 700;
+        }}
+
+        .stage-mid-badge {{
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.4);
+            font-weight: 700;
+        }}
+
+        .stage-senior-badge {{
+            background: rgba(139, 92, 246, 0.2);
+            color: #c4b5fd;
+            border: 1px solid rgba(139, 92, 246, 0.4);
+            font-weight: 700;
+        }}
+
+        .stage-exec-badge {{
+            background: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.5);
+            font-weight: 800;
         }}
 
         .exp-badge {{
@@ -693,7 +738,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
     <div class="container">
         <header>
             <div class="logo-title">
-                <h1>AshbyHQ Precision Career Engine</h1>
+                <h1>AshbyHQ Wellfound-Grade Career Engine</h1>
                 <p>Scouring live jobs across {total_companies} company boards matched against Grant Flores Akuoko's CV</p>
             </div>
         </header>
@@ -719,8 +764,8 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 <div class="stat-label">Matching Roles Filtered</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="studentCount">0</div>
-                <div class="stat-label">🎓 Verified Intern & Placement Roles</div>
+                <div class="stat-value" id="entryCount">0</div>
+                <div class="stat-label">🌱 Entry-Level Roles</div>
             </div>
         </div>
 
@@ -738,12 +783,14 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 
             <div class="filter-row">
                 <div>
-                    <div class="filter-group-title">Experience Level & Career Stage</div>
-                    <div class="tag-group" id="expChips">
-                        <span class="filter-chip active-green" data-exp="early" onclick="toggleExpFilter('early', this)">🌱 All Early Career & Entry-Level (0 - 2 Yrs)</span>
-                        <span class="filter-chip" data-exp="student" onclick="toggleExpFilter('student', this)">🎓 Verified Students, Internships & Placements Only</span>
-                        <span class="filter-chip" data-exp="grad" onclick="toggleExpFilter('grad', this)">💼 Graduates & Entry-Level Roles (SDR / BDR / Analyst)</span>
-                        <span class="filter-chip" data-exp="all" onclick="toggleExpFilter('all', this)">All Experience Levels</span>
+                    <div class="filter-group-title">Experience Level & Career Stage (Wellfound Standard)</div>
+                    <div class="tag-group" id="stageChips">
+                        <span class="filter-chip active-green" data-stage="entry" onclick="toggleStageFilter('entry', this)">🌱 Entry-Level / Junior (0 - 2 Yrs)</span>
+                        <span class="filter-chip" data-stage="intern" onclick="toggleStageFilter('intern', this)">🎓 Internship / Placement / Student</span>
+                        <span class="filter-chip" data-stage="mid" onclick="toggleStageFilter('mid', this)">💼 Mid-Level (3 - 5 Yrs)</span>
+                        <span class="filter-chip" data-stage="senior" onclick="toggleStageFilter('senior', this)">👔 Senior Level (5 - 8 Yrs)</span>
+                        <span class="filter-chip" data-stage="exec" onclick="toggleStageFilter('exec', this)">👑 Executive & Director (8+ Yrs)</span>
+                        <span class="filter-chip" data-stage="all" onclick="toggleStageFilter('all', this)">🌍 All Career Stages</span>
                     </div>
                 </div>
 
@@ -818,7 +865,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
     <script>
         const allJobs = {jobs_json};
         let currentTab = 'feed';
-        let activeExp = 'early';
+        let activeStage = 'entry';
         let activeCountry = 'all';
         let activeRemote = 'all';
         let activeDept = 'all';
@@ -869,11 +916,11 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             renderFilteredJobs();
         }}
 
-        function toggleExpFilter(expMode, el) {{
-            document.querySelectorAll('#expChips .filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
-            if (expMode === 'early' || expMode === 'student') el.classList.add('active-green');
+        function toggleStageFilter(stage, el) {{
+            document.querySelectorAll('#stageChips .filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
+            if (stage === 'entry' || stage === 'intern') el.classList.add('active-green');
             else el.classList.add('active');
-            activeExp = expMode;
+            activeStage = stage;
             renderFilteredJobs();
         }}
 
@@ -908,14 +955,14 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
         function resetAllFilters() {{
             document.getElementById('searchInput').value = '';
             document.getElementById('sortSelect').value = 'score-desc';
-            activeExp = 'early';
+            activeStage = 'entry';
             activeCountry = 'all';
             activeRemote = 'all';
             activeDept = 'all';
             minScore = 50;
 
             document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
-            document.querySelector('#expChips [data-exp="early"]').classList.add('active-green');
+            document.querySelector('#stageChips [data-stage="entry"]').classList.add('active-green');
             document.querySelector('#countryChips [data-country="all"]').classList.add('active');
             document.querySelector('#remoteChips [data-remote="all"]').classList.add('active');
             document.querySelector('#deptChips [data-dept="all"]').classList.add('active');
@@ -952,9 +999,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 
                 if (job.score < minScore) return false;
 
-                if (activeExp === 'early' && !job.is_early_career) return false;
-                if (activeExp === 'student' && !job.is_student_intern) return false;
-                if (activeExp === 'grad' && (!job.is_early_career || job.is_student_intern)) return false;
+                if (activeStage !== 'all' && job.stage_code !== activeStage) return false;
 
                 if (activeCountry !== 'all' && job.country !== activeCountry) return false;
 
@@ -991,7 +1036,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             }}
 
             document.getElementById('showingCount').innerText = filtered.length.toLocaleString();
-            document.getElementById('studentCount').innerText = allJobs.filter(j => j.is_student_intern).length.toLocaleString();
+            document.getElementById('entryCount').innerText = allJobs.filter(j => j.stage_code === 'entry').length.toLocaleString();
             document.getElementById('resultsCountText').innerText = `Displaying ${{filtered.length.toLocaleString()}} positions in ${{currentTab.toUpperCase()}} tab`;
 
             const grid = document.getElementById('jobsGrid');
@@ -1007,8 +1052,13 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 if (job.score >= 85) matchClass = 'match-emerald';
                 else if (job.score >= 70) matchClass = 'match-blue';
 
-                const studentBadge = job.is_student_intern ? `<span class="tag student-badge">🎓 Student / Intern / Placement</span>` : '';
-                const levelBadge = (!job.is_student_intern && job.is_early_career) ? `<span class="tag early-badge">🌱 Entry Level / Grad</span>` : '';
+                let stageBadgeClass = 'stage-mid-badge';
+                if (job.stage_code === 'intern') stageBadgeClass = 'stage-intern-badge';
+                if (job.stage_code === 'entry') stageBadgeClass = 'stage-entry-badge';
+                if (job.stage_code === 'senior') stageBadgeClass = 'stage-senior-badge';
+                if (job.stage_code === 'exec') stageBadgeClass = 'stage-exec-badge';
+
+                const stageBadge = `<span class="tag ${{stageBadgeClass}}">${{job.stage_badge}}</span>`;
 
                 let modeBadge = `<span class="tag mode-onsite-badge">🏛️ On-Site</span>`;
                 if (job.workplace_code === 'remote') modeBadge = `<span class="tag mode-remote-badge">🌐 Fully Remote</span>`;
@@ -1033,8 +1083,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                         </div>
                         <div class="meta-tags">
                             ${{statusBadge}}
-                            ${{studentBadge}}
-                            ${{levelBadge}}
+                            ${{stageBadge}}
                             ${{modeBadge}}
                             ${{expBadge}}
                             <span class="tag">📍 ${{job.location}}</span>
@@ -1073,7 +1122,7 @@ def main():
 
     jobs_data = []
     for job in all_jobs:
-        score, tags, is_early, is_student, country, workplace_label, workplace_code, exp_text, years_num = calculate_match_details(cv_keywords, job)
+        score, tags, country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge = calculate_match_details(cv_keywords, job)
         if score >= 50.0:
             jobs_data.append({
                 "company": job.get("company", "").capitalize(),
@@ -1083,13 +1132,14 @@ def main():
                 "url": job.get("jobUrl"),
                 "score": score,
                 "matched_tags": tags,
-                "is_early_career": is_early,
-                "is_student_intern": is_student,
                 "country": country,
                 "workplace_label": workplace_label,
                 "workplace_code": workplace_code,
                 "exp_text": exp_text,
-                "years_num": years_num
+                "years_num": years_num,
+                "stage_label": stage_label,
+                "stage_code": stage_code,
+                "stage_badge": stage_badge
             })
 
     jobs_data.sort(key=lambda x: x["score"], reverse=True)
@@ -1099,7 +1149,7 @@ def main():
     output_path.write_text(html, encoding="utf-8")
 
     print("==========================================================")
-    print(" 🚀 PRECISION CLASSIFIED DASHBOARD: job_dashboard.html    ")
+    print(" 🚀 WELLFOUND-GRADE CAREER ENGINE: job_dashboard.html     ")
     print("==========================================================\n")
     print(f"Opening dashboard in your web browser...")
     webbrowser.open(f"file://{output_path.resolve()}")

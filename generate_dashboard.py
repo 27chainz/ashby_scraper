@@ -128,6 +128,33 @@ def classify_career_stage(title: str, full_text: str, years_num):
     return "Mid-Level", "mid", "💼 Mid-Level"
 
 
+def detect_language_requirements(job_text: str, user_languages: set):
+    text_lower = job_text.lower()
+
+    lang_map = {
+        "german": ["german", "deutsch", "fließend deutsch"],
+        "french": ["french", "français", "francais"],
+        "spanish": ["spanish", "español", "espanol"],
+        "italian": ["italian", "italiano"],
+        "mandarin": ["mandarin", "chinese"],
+        "japanese": ["japanese"],
+        "swedish": ["swedish"],
+        "danish": ["danish"],
+        "norwegian": ["norwegian"],
+        "finnish": ["finnish"],
+        "portuguese": ["portuguese"]
+    }
+
+    required_foreign = []
+    for lang, triggers in lang_map.items():
+        if any(re.search(r"\b" + re.escape(t) + r"\b", text_lower) for t in triggers):
+            if any(req_kw in text_lower for req_kw in ["fluent", "native", "speaking", "required", "language", "speaker", "must speak", "level c1", "level c2", "b2"]):
+                required_foreign.append(lang.capitalize())
+
+    unsupported = [l for l in required_foreign if l.lower() not in user_languages and l.lower() != "dutch"]
+    return required_foreign, unsupported
+
+
 def parse_job_metadata(job: dict):
     title = job.get("title", "") or ""
     description = job.get("descriptionPlain", "") or ""
@@ -172,15 +199,17 @@ def parse_job_metadata(job: dict):
     return country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge
 
 
-def calculate_match_details(cv_keywords: set, job: dict):
+def calculate_match_details(cv_keywords: set, user_languages: set, job: dict):
     title = job.get("title", "")
     description = job.get("descriptionPlain", "")
     job_text = f"{title} {description}".lower()
 
     country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge = parse_job_metadata(job)
 
+    required_foreign, unsupported_langs = detect_language_requirements(job_text, user_languages)
+
     if not cv_keywords:
-        return 0.0, [], country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge
+        return 0.0, [], country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge, unsupported_langs
 
     matched = [kw for kw in cv_keywords if kw in job_text and len(kw) > 3]
     title_matches = [kw for kw in cv_keywords if kw in title.lower() and len(kw) > 3]
@@ -192,9 +221,12 @@ def calculate_match_details(cv_keywords: set, job: dict):
     if stage_code in ["entry", "intern"]:
         score += 15.0
 
-    score = min(round(score, 1), 100.0)
+    if unsupported_langs:
+        score -= 40.0
+
+    score = max(0.0, min(round(score, 1), 100.0))
     matched_tags = list(set(title_matches + matched))[:5]
-    return score, matched_tags, country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge
+    return score, matched_tags, country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge, unsupported_langs
 
 
 def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int):
@@ -205,7 +237,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AshbyHQ Wellfound-Grade Career Engine</title>
+    <title>AshbyHQ Precision Career & Language Matcher</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -575,6 +607,13 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             font-weight: 800;
         }}
 
+        .lang-alert-badge {{
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.5);
+            font-weight: 700;
+        }}
+
         .exp-badge {{
             background: rgba(245, 158, 11, 0.15);
             color: #fbbf24;
@@ -738,8 +777,8 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
     <div class="container">
         <header>
             <div class="logo-title">
-                <h1>AshbyHQ Wellfound-Grade Career Engine</h1>
-                <p>Scouring live jobs across {total_companies} company boards matched against Grant Flores Akuoko's CV</p>
+                <h1>AshbyHQ Precision Career & Language Matcher</h1>
+                <p>Scouring live jobs across {total_companies} company boards matched against Grant Flores Akuoko's CV (Languages: English, Dutch)</p>
             </div>
         </header>
 
@@ -783,7 +822,15 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 
             <div class="filter-row">
                 <div>
-                    <div class="filter-group-title">Experience Level & Career Stage (Wellfound Standard)</div>
+                    <div class="filter-group-title">Language Compatibility</div>
+                    <div class="tag-group" id="langChips">
+                        <span class="filter-chip active-green" data-lang="matched" onclick="toggleLangFilter('matched', this)">🇬🇧 Native English & 🇳🇱 Fluent Dutch Roles Only</span>
+                        <span class="filter-chip" data-lang="all" onclick="toggleLangFilter('all', this)">Show All (Include German/French Required Roles)</span>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="filter-group-title">Experience Level & Career Stage</div>
                     <div class="tag-group" id="stageChips">
                         <span class="filter-chip active-green" data-stage="entry" onclick="toggleStageFilter('entry', this)">🌱 Entry-Level / Junior (0 - 2 Yrs)</span>
                         <span class="filter-chip" data-stage="intern" onclick="toggleStageFilter('intern', this)">🎓 Internship / Placement / Student</span>
@@ -814,18 +861,6 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                         <span class="filter-chip" data-country="Germany" onclick="toggleCountryFilter('Germany', this)">🇩🇪 Germany</span>
                         <span class="filter-chip" data-country="France" onclick="toggleCountryFilter('France', this)">🇫🇷 France</span>
                         <span class="filter-chip" data-country="Netherlands" onclick="toggleCountryFilter('Netherlands', this)">🇳🇱 Netherlands</span>
-                    </div>
-                </div>
-
-                <div>
-                    <div class="filter-group-title">Department / Sector</div>
-                    <div class="tag-group" id="deptChips">
-                        <span class="filter-chip active" data-dept="all" onclick="toggleDeptFilter('all', this)">All Departments</span>
-                        <span class="filter-chip" data-dept="sales" onclick="toggleDeptFilter('sales', this)">💼 Sales & SDR / BDR</span>
-                        <span class="filter-chip" data-dept="bizdev" onclick="toggleDeptFilter('bizdev', this)">🤝 Business Development</span>
-                        <span class="filter-chip" data-dept="finance" onclick="toggleDeptFilter('finance', this)">📊 Finance & Analytics</span>
-                        <span class="filter-chip" data-dept="product" onclick="toggleDeptFilter('product', this)">🎯 Product & Operations</span>
-                        <span class="filter-chip" data-dept="marketing" onclick="toggleDeptFilter('marketing', this)">🚀 Marketing & Growth</span>
                     </div>
                 </div>
 
@@ -865,6 +900,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
     <script>
         const allJobs = {jobs_json};
         let currentTab = 'feed';
+        let activeLang = 'matched';
         let activeStage = 'entry';
         let activeCountry = 'all';
         let activeRemote = 'all';
@@ -916,6 +952,14 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             renderFilteredJobs();
         }}
 
+        function toggleLangFilter(langMode, el) {{
+            document.querySelectorAll('#langChips .filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
+            if (langMode === 'matched') el.classList.add('active-green');
+            else el.classList.add('active');
+            activeLang = langMode;
+            renderFilteredJobs();
+        }}
+
         function toggleStageFilter(stage, el) {{
             document.querySelectorAll('#stageChips .filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
             if (stage === 'entry' || stage === 'intern') el.classList.add('active-green');
@@ -938,13 +982,6 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             renderFilteredJobs();
         }}
 
-        function toggleDeptFilter(dept, el) {{
-            document.querySelectorAll('#deptChips .filter-chip').forEach(c => c.classList.remove('active'));
-            el.classList.add('active');
-            activeDept = dept;
-            renderFilteredJobs();
-        }}
-
         function toggleScoreFilter(score, el) {{
             document.querySelectorAll('#scoreChips .filter-chip').forEach(c => c.classList.remove('active'));
             el.classList.add('active');
@@ -955,17 +992,17 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
         function resetAllFilters() {{
             document.getElementById('searchInput').value = '';
             document.getElementById('sortSelect').value = 'score-desc';
+            activeLang = 'matched';
             activeStage = 'entry';
             activeCountry = 'all';
             activeRemote = 'all';
-            activeDept = 'all';
             minScore = 50;
 
             document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
+            document.querySelector('#langChips [data-lang="matched"]').classList.add('active-green');
             document.querySelector('#stageChips [data-stage="entry"]').classList.add('active-green');
             document.querySelector('#countryChips [data-country="all"]').classList.add('active');
             document.querySelector('#remoteChips [data-remote="all"]').classList.add('active');
-            document.querySelector('#deptChips [data-dept="all"]').classList.add('active');
             document.querySelector('#scoreChips [data-score="50"]').classList.add('active');
 
             renderFilteredJobs();
@@ -997,6 +1034,8 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 if (currentTab === 'saved' && status !== 'saved') return false;
                 if (currentTab === 'archived' && status !== 'archived') return false;
 
+                if (activeLang === 'matched' && job.unsupported_langs && job.unsupported_langs.length > 0) return false;
+
                 if (job.score < minScore) return false;
 
                 if (activeStage !== 'all' && job.stage_code !== activeStage) return false;
@@ -1011,18 +1050,9 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                     job.title.toLowerCase().includes(search) ||
                     job.company.toLowerCase().includes(search) ||
                     job.location.toLowerCase().includes(search) ||
-                    job.department.toLowerCase().includes(search) ||
                     job.matched_tags.some(t => t.toLowerCase().includes(search));
 
                 if (!textMatches) return false;
-
-                const deptLower = job.department.toLowerCase();
-                const titleLower = job.title.toLowerCase();
-                if (activeDept === 'sales' && !(deptLower.includes('sales') || titleLower.includes('sales') || titleLower.includes('sdr') || titleLower.includes('bdr') || titleLower.includes('account executive'))) return false;
-                if (activeDept === 'bizdev' && !(deptLower.includes('business dev') || titleLower.includes('business dev') || titleLower.includes('bdr') || titleLower.includes('partnership'))) return false;
-                if (activeDept === 'finance' && !(deptLower.includes('finance') || titleLower.includes('finance') || titleLower.includes('accounting') || titleLower.includes('analytic'))) return false;
-                if (activeDept === 'product' && !(deptLower.includes('product') || titleLower.includes('product') || titleLower.includes('strategy') || titleLower.includes('operation'))) return false;
-                if (activeDept === 'marketing' && !(deptLower.includes('market') || titleLower.includes('market') || titleLower.includes('growth'))) return false;
 
                 return true;
             }});
@@ -1066,6 +1096,11 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 
                 const expBadge = `<span class="tag exp-badge">⏳ ${{job.exp_text}}</span>`;
 
+                let langBadge = '';
+                if (job.unsupported_langs && job.unsupported_langs.length > 0) {{
+                    langBadge = `<span class="tag lang-alert-badge">⚠️ Requires ${{job.unsupported_langs.join(', ')}}</span>`;
+                }}
+
                 let statusBadge = '';
                 if (status === 'applied') statusBadge = `<span class="tag status-applied-badge">✅ Applied</span>`;
                 if (status === 'saved') statusBadge = `<span class="tag status-saved-badge">⏳ Saved for Later</span>`;
@@ -1086,6 +1121,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                             ${{stageBadge}}
                             ${{modeBadge}}
                             ${{expBadge}}
+                            ${{langBadge}}
                             <span class="tag">📍 ${{job.location}}</span>
                         </div>
                         <div class="meta-tags">
@@ -1112,6 +1148,10 @@ def main():
     cv_text = cv_path.read_text(encoding="utf-8") if cv_path.exists() else ""
     cv_keywords = extract_keywords(cv_text)
 
+    user_languages = {"english"}
+    if "dutch" in cv_text.lower():
+        user_languages.add("dutch")
+
     print("Discovering active AshbyHQ company boards...")
     slugs = asyncio.run(discover_company_slugs())
     print(f"Discovered {len(slugs)} active companies on AshbyHQ.")
@@ -1122,7 +1162,7 @@ def main():
 
     jobs_data = []
     for job in all_jobs:
-        score, tags, country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge = calculate_match_details(cv_keywords, job)
+        score, tags, country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge, unsupported_langs = calculate_match_details(cv_keywords, user_languages, job)
         if score >= 50.0:
             jobs_data.append({
                 "company": job.get("company", "").capitalize(),
@@ -1139,7 +1179,8 @@ def main():
                 "years_num": years_num,
                 "stage_label": stage_label,
                 "stage_code": stage_code,
-                "stage_badge": stage_badge
+                "stage_badge": stage_badge,
+                "unsupported_langs": unsupported_langs
             })
 
     jobs_data.sort(key=lambda x: x["score"], reverse=True)
@@ -1149,7 +1190,7 @@ def main():
     output_path.write_text(html, encoding="utf-8")
 
     print("==========================================================")
-    print(" 🚀 WELLFOUND-GRADE CAREER ENGINE: job_dashboard.html     ")
+    print(" 🚀 LANGUAGE-AWARE CAREER MATCHING: job_dashboard.html    ")
     print("==========================================================\n")
     print(f"Opening dashboard in your web browser...")
     webbrowser.open(f"file://{output_path.resolve()}")

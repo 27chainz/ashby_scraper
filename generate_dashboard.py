@@ -120,7 +120,7 @@ def parse_job_metadata(job: dict):
         num_search = re.search(r"\d+", raw_match)
         if num_search:
             years_num = int(num_search.group())
-    elif any(term in full_text for term in ["no experience", "entry level", "graduate", "intern", "placement", "student"]):
+    elif any(term in full_text for term in ["no experience", "entry level", "graduate", "intern", "placement"]):
         exp_text = "0-1 yrs (Entry Level)"
         years_num = 0
 
@@ -131,31 +131,41 @@ def calculate_match_details(cv_keywords: set, job: dict):
     title = job.get("title", "")
     description = job.get("descriptionPlain", "")
     job_text = f"{title} {description}".lower()
+    title_lower = title.lower()
 
     country, workplace_label, workplace_code, exp_text, years_num = parse_job_metadata(job)
+
+    senior_patterns = [
+        r"\bvp\b", r"\bvice president\b", r"\bdirector\b", r"\bhead of\b", r"\bchief\b",
+        r"\bexecutive\b", r"\bprincipal\b", r"\bpartner\b", r"\bsenior\b", r"\bsr\.\b", r"\bsr\b", r"\blead\b"
+    ]
+    is_senior = any(re.search(pat, title_lower) for pat in senior_patterns) or (years_num is not None and years_num >= 5)
+
+    student_patterns = [
+        r"\bintern\b", r"\binternship\b", r"\bplacement\b", r"\bco-op\b", r"\bcoop\b",
+        r"\bworking student\b", r"\bstudent\b", r"\bapprentice\b", r"\bapprenticeship\b"
+    ]
+    has_student_term = any(re.search(pat, title_lower) for pat in student_patterns)
+    is_student_intern = has_student_term and not is_senior and "internal" not in title_lower and "international" not in title_lower
+
+    early_patterns = [
+        r"\bbdr\b", r"\bsdr\b", r"\bbusiness development representative\b", r"\bsales development representative\b",
+        r"\bjunior\b", r"\bassociate\b", r"\banalyst\b", r"\bgraduate\b", r"\bnew grad\b", r"\btrainee\b", r"\bentry level\b", r"\bassistant\b"
+    ]
+    has_early_term = any(re.search(pat, title_lower) for pat in early_patterns)
+    is_early_career = (is_student_intern or (has_early_term and not is_senior) or (years_num is not None and years_num <= 2)) and not is_senior
 
     if not cv_keywords:
         return 0.0, [], False, False, country, workplace_label, workplace_code, exp_text, years_num
 
     matched = [kw for kw in cv_keywords if kw in job_text and len(kw) > 3]
-    title_matches = [kw for kw in cv_keywords if kw in title.lower() and len(kw) > 3]
+    title_matches = [kw for kw in cv_keywords if kw in title_lower and len(kw) > 3]
 
     score = (len(matched) / len(cv_keywords)) * 100
     if title_matches:
         score += len(title_matches) * 10
 
-    student_intern_terms = ["intern", "internship", "placement", "co-op", "coop", "working student",
-                            "student", "apprentice", "apprenticeship", "summer intern"]
-    is_student_intern = any(term in title.lower() for term in student_intern_terms)
-
-    early_terms = ["bdr", "sdr", "business development representative", "sales development representative",
-                   "junior", "associate", "analyst", "graduate", "new grad", "trainee", "entry level", "assistant"]
-    is_early_career = is_student_intern or any(term in title.lower() for term in early_terms) or (years_num is not None and years_num <= 2)
-
-    senior_terms = ["senior", "sr.", "director", "lead", "head of", "vp", "vice president", "principal", "chief"]
-    is_senior = any(term in title.lower() for term in senior_terms) or (years_num is not None and years_num >= 5)
-
-    if is_early_career and not is_senior:
+    if is_early_career:
         score += 15.0
 
     score = min(round(score, 1), 100.0)
@@ -171,7 +181,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AshbyHQ Comprehensive Career Engine</title>
+    <title>AshbyHQ Precision Career Engine</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -683,7 +693,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
     <div class="container">
         <header>
             <div class="logo-title">
-                <h1>AshbyHQ Career Engine & Application Tracker</h1>
+                <h1>AshbyHQ Precision Career Engine</h1>
                 <p>Scouring live jobs across {total_companies} company boards matched against Grant Flores Akuoko's CV</p>
             </div>
         </header>
@@ -709,8 +719,8 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 <div class="stat-label">Matching Roles Filtered</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="hybridCount">0</div>
-                <div class="stat-label">🏢 Hybrid Roles</div>
+                <div class="stat-value" id="studentCount">0</div>
+                <div class="stat-label">🎓 Verified Intern & Placement Roles</div>
             </div>
         </div>
 
@@ -731,7 +741,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                     <div class="filter-group-title">Experience Level & Career Stage</div>
                     <div class="tag-group" id="expChips">
                         <span class="filter-chip active-green" data-exp="early" onclick="toggleExpFilter('early', this)">🌱 All Early Career & Entry-Level (0 - 2 Yrs)</span>
-                        <span class="filter-chip" data-exp="student" onclick="toggleExpFilter('student', this)">🎓 Students, Internships & Placement Years Only</span>
+                        <span class="filter-chip" data-exp="student" onclick="toggleExpFilter('student', this)">🎓 Verified Students, Internships & Placements Only</span>
                         <span class="filter-chip" data-exp="grad" onclick="toggleExpFilter('grad', this)">💼 Graduates & Entry-Level Roles (SDR / BDR / Analyst)</span>
                         <span class="filter-chip" data-exp="all" onclick="toggleExpFilter('all', this)">All Experience Levels</span>
                     </div>
@@ -981,7 +991,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             }}
 
             document.getElementById('showingCount').innerText = filtered.length.toLocaleString();
-            document.getElementById('hybridCount').innerText = allJobs.filter(j => j.workplace_code === 'hybrid').length.toLocaleString();
+            document.getElementById('studentCount').innerText = allJobs.filter(j => j.is_student_intern).length.toLocaleString();
             document.getElementById('resultsCountText').innerText = `Displaying ${{filtered.length.toLocaleString()}} positions in ${{currentTab.toUpperCase()}} tab`;
 
             const grid = document.getElementById('jobsGrid');
@@ -1089,7 +1099,7 @@ def main():
     output_path.write_text(html, encoding="utf-8")
 
     print("==========================================================")
-    print(" 🚀 REFINED HYBRID/REMOTE DASHBOARD: job_dashboard.html   ")
+    print(" 🚀 PRECISION CLASSIFIED DASHBOARD: job_dashboard.html    ")
     print("==========================================================\n")
     print(f"Opening dashboard in your web browser...")
     webbrowser.open(f"file://{output_path.resolve()}")

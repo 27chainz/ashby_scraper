@@ -237,7 +237,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AshbyHQ Precision Career & Language Matcher</title>
+    <title>AshbyHQ Universal Career Search Engine</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -777,7 +777,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
     <div class="container">
         <header>
             <div class="logo-title">
-                <h1>AshbyHQ Precision Career & Language Matcher</h1>
+                <h1>AshbyHQ Universal Career Search Engine</h1>
                 <p>Scouring live jobs across {total_companies} company boards matched against Grant Flores Akuoko's CV (Languages: English, Dutch)</p>
             </div>
         </header>
@@ -811,7 +811,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
         <div class="filter-panel">
             <div class="search-row">
                 <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="Search by role, company, skill (e.g. Intern, Placement, SDR, BDR, London)..." oninput="renderFilteredJobs()">
+                    <input type="text" id="searchInput" placeholder="Search by title, company, skill, city, department (e.g. Intern, Placement, SDR, London, Python, Finance)..." oninput="renderFilteredJobs()">
                 </div>
                 <select id="sortSelect" class="sort-select" onchange="renderFilteredJobs()">
                     <option value="score-desc">Sort: Highest Match Score</option>
@@ -1050,6 +1050,10 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                     job.title.toLowerCase().includes(search) ||
                     job.company.toLowerCase().includes(search) ||
                     job.location.toLowerCase().includes(search) ||
+                    job.department.toLowerCase().includes(search) ||
+                    job.stage_label.toLowerCase().includes(search) ||
+                    job.workplace_label.toLowerCase().includes(search) ||
+                    job.exp_text.toLowerCase().includes(search) ||
                     job.matched_tags.some(t => t.toLowerCase().includes(search));
 
                 if (!textMatches) return false;
@@ -1190,7 +1194,7 @@ def main():
     output_path.write_text(html, encoding="utf-8")
 
     print("==========================================================")
-    print(" 🚀 LANGUAGE-AWARE CAREER MATCHING: job_dashboard.html    ")
+    print(" 🚀 UNIVERSAL SEARCH DASHBOARD: job_dashboard.html        ")
     print("==========================================================\n")
     print(f"Opening dashboard in your web browser...")
     webbrowser.open(f"file://{output_path.resolve()}")

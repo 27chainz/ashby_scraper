@@ -65,13 +65,33 @@ def extract_keywords(text: str):
     return {w for w in words if w not in stop_words}
 
 
+def classify_workplace(job: dict):
+    location = str(job.get("location") or "")
+    title = str(job.get("title") or "")
+    description = str(job.get("descriptionPlain") or "")
+    workplace_type_attr = str(job.get("workplaceType") or "")
+    full_head = f"{title} {location} {workplace_type_attr}".lower()
+    full_text = f"{full_head} {description[:400]}".lower()
+
+    if "hybrid" in full_head or "hybrid" in full_text or "in office" in full_text or "days a week" in full_text or "days in" in full_text:
+        return "Hybrid", "hybrid"
+
+    if bool(job.get("isRemote", False)) or workplace_type_attr.lower() == "remote" or "fully remote" in full_text or "100% remote" in full_text or "remote -" in location.lower() or "(remote)" in location.lower() or location.lower() == "remote":
+        return "Fully Remote", "remote"
+
+    if "remote" in location.lower() or "remote" in title.lower():
+        return "Fully Remote", "remote"
+
+    return "On-Site / In-Office", "onsite"
+
+
 def parse_job_metadata(job: dict):
     title = job.get("title", "") or ""
     description = job.get("descriptionPlain", "") or ""
     location = str(job.get("location") or "Unspecified")
     full_text = f"{title} {description}".lower()
 
-    is_remote = bool(job.get("isRemote", False)) or "remote" in location.lower() or "remote" in full_text[:300]
+    workplace_label, workplace_code = classify_workplace(job)
 
     country = "Other"
     loc_lower = location.lower()
@@ -87,7 +107,7 @@ def parse_job_metadata(job: dict):
         country = "France"
     elif any(k in loc_lower for k in ["netherlands", "amsterdam"]):
         country = "Netherlands"
-    elif is_remote:
+    elif workplace_code == "remote":
         country = "Remote Worldwide"
 
     exp_matches = re.findall(r"(\b\d+\s*-\s*\d+|\b\d+\+?)\s*years?(?:\s*of)?\s*(?:relevant\s*|direct\s*|professional\s*|work\s*)?exp", full_text, re.IGNORECASE)
@@ -104,7 +124,7 @@ def parse_job_metadata(job: dict):
         exp_text = "0-1 yrs (Entry Level)"
         years_num = 0
 
-    return country, is_remote, exp_text, years_num
+    return country, workplace_label, workplace_code, exp_text, years_num
 
 
 def calculate_match_details(cv_keywords: set, job: dict):
@@ -112,10 +132,10 @@ def calculate_match_details(cv_keywords: set, job: dict):
     description = job.get("descriptionPlain", "")
     job_text = f"{title} {description}".lower()
 
-    country, is_remote, exp_text, years_num = parse_job_metadata(job)
+    country, workplace_label, workplace_code, exp_text, years_num = parse_job_metadata(job)
 
     if not cv_keywords:
-        return 0.0, [], False, False, country, is_remote, exp_text, years_num
+        return 0.0, [], False, False, country, workplace_label, workplace_code, exp_text, years_num
 
     matched = [kw for kw in cv_keywords if kw in job_text and len(kw) > 3]
     title_matches = [kw for kw in cv_keywords if kw in title.lower() and len(kw) > 3]
@@ -140,7 +160,7 @@ def calculate_match_details(cv_keywords: set, job: dict):
 
     score = min(round(score, 1), 100.0)
     matched_tags = list(set(title_matches + matched))[:5]
-    return score, matched_tags, is_early_career, is_student_intern, country, is_remote, exp_text, years_num
+    return score, matched_tags, is_early_career, is_student_intern, country, workplace_label, workplace_code, exp_text, years_num
 
 
 def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int):
@@ -151,7 +171,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AshbyHQ Career Engine & Application Tracker</title>
+    <title>AshbyHQ Comprehensive Career Engine</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -507,6 +527,27 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             font-weight: 700;
         }}
 
+        .mode-remote-badge {{
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.5);
+            font-weight: 700;
+        }}
+
+        .mode-hybrid-badge {{
+            background: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.5);
+            font-weight: 700;
+        }}
+
+        .mode-onsite-badge {{
+            background: rgba(156, 163, 175, 0.15);
+            color: #d1d5db;
+            border: 1px solid rgba(156, 163, 175, 0.3);
+            font-weight: 600;
+        }}
+
         .status-applied-badge {{
             background: rgba(16, 185, 129, 0.25);
             color: #34d399;
@@ -550,17 +591,6 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
         .apply-btn:hover {{
             background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
-        }}
-
-        .status-select-btn {{
-            background: #090d14;
-            border: 1px solid var(--card-border);
-            color: var(--text-muted);
-            padding: 0.8rem 0.8rem;
-            border-radius: 10px;
-            font-size: 0.85rem;
-            font-weight: 700;
-            cursor: pointer;
         }}
 
         .modal-overlay {{
@@ -653,7 +683,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
     <div class="container">
         <header>
             <div class="logo-title">
-                <h1>AshbyHQ Career Matcher & Tracker</h1>
+                <h1>AshbyHQ Career Engine & Application Tracker</h1>
                 <p>Scouring live jobs across {total_companies} company boards matched against Grant Flores Akuoko's CV</p>
             </div>
         </header>
@@ -679,8 +709,8 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 <div class="stat-label">Matching Roles Filtered</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="studentCount">0</div>
-                <div class="stat-label">🎓 Intern & Placement Roles</div>
+                <div class="stat-value" id="hybridCount">0</div>
+                <div class="stat-label">🏢 Hybrid Roles</div>
             </div>
         </div>
 
@@ -708,6 +738,16 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 </div>
 
                 <div>
+                    <div class="filter-group-title">Workplace Mode</div>
+                    <div class="tag-group" id="remoteChips">
+                        <span class="filter-chip active" data-remote="all" onclick="toggleRemoteFilter('all', this)">All Modes</span>
+                        <span class="filter-chip" data-remote="remote" onclick="toggleRemoteFilter('remote', this)">🌐 Fully Remote Only</span>
+                        <span class="filter-chip" data-remote="hybrid" onclick="toggleRemoteFilter('hybrid', this)">🏢 Hybrid Only</span>
+                        <span class="filter-chip" data-remote="onsite" onclick="toggleRemoteFilter('onsite', this)">🏛️ On-Site Only</span>
+                    </div>
+                </div>
+
+                <div>
                     <div class="filter-group-title">Country / Region</div>
                     <div class="tag-group" id="countryChips">
                         <span class="filter-chip active" data-country="all" onclick="toggleCountryFilter('all', this)">All Countries</span>
@@ -717,15 +757,6 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                         <span class="filter-chip" data-country="Germany" onclick="toggleCountryFilter('Germany', this)">🇩🇪 Germany</span>
                         <span class="filter-chip" data-country="France" onclick="toggleCountryFilter('France', this)">🇫🇷 France</span>
                         <span class="filter-chip" data-country="Netherlands" onclick="toggleCountryFilter('Netherlands', this)">🇳🇱 Netherlands</span>
-                    </div>
-                </div>
-
-                <div>
-                    <div class="filter-group-title">Workplace Mode</div>
-                    <div class="tag-group" id="remoteChips">
-                        <span class="filter-chip active" data-remote="all" onclick="toggleRemoteFilter('all', this)">All Modes</span>
-                        <span class="filter-chip" data-remote="remote" onclick="toggleRemoteFilter('remote', this)">🌐 Remote Only</span>
-                        <span class="filter-chip" data-remote="onsite" onclick="toggleRemoteFilter('onsite', this)">🏢 On-Site / Hybrid</span>
                     </div>
                 </div>
 
@@ -917,8 +948,9 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 
                 if (activeCountry !== 'all' && job.country !== activeCountry) return false;
 
-                if (activeRemote === 'remote' && !job.is_remote) return false;
-                if (activeRemote === 'onsite' && job.is_remote) return false;
+                if (activeRemote === 'remote' && job.workplace_code !== 'remote') return false;
+                if (activeRemote === 'hybrid' && job.workplace_code !== 'hybrid') return false;
+                if (activeRemote === 'onsite' && job.workplace_code !== 'onsite') return false;
 
                 const textMatches = !search || 
                     job.title.toLowerCase().includes(search) ||
@@ -949,7 +981,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             }}
 
             document.getElementById('showingCount').innerText = filtered.length.toLocaleString();
-            document.getElementById('studentCount').innerText = allJobs.filter(j => j.is_student_intern).length.toLocaleString();
+            document.getElementById('hybridCount').innerText = allJobs.filter(j => j.workplace_code === 'hybrid').length.toLocaleString();
             document.getElementById('resultsCountText').innerText = `Displaying ${{filtered.length.toLocaleString()}} positions in ${{currentTab.toUpperCase()}} tab`;
 
             const grid = document.getElementById('jobsGrid');
@@ -967,7 +999,11 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
 
                 const studentBadge = job.is_student_intern ? `<span class="tag student-badge">🎓 Student / Intern / Placement</span>` : '';
                 const levelBadge = (!job.is_student_intern && job.is_early_career) ? `<span class="tag early-badge">🌱 Entry Level / Grad</span>` : '';
-                const remoteBadge = job.is_remote ? `<span class="tag remote-badge">🌐 Remote</span>` : '';
+
+                let modeBadge = `<span class="tag mode-onsite-badge">🏛️ On-Site</span>`;
+                if (job.workplace_code === 'remote') modeBadge = `<span class="tag mode-remote-badge">🌐 Fully Remote</span>`;
+                if (job.workplace_code === 'hybrid') modeBadge = `<span class="tag mode-hybrid-badge">🏢 Hybrid</span>`;
+
                 const expBadge = `<span class="tag exp-badge">⏳ ${{job.exp_text}}</span>`;
 
                 let statusBadge = '';
@@ -989,7 +1025,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                             ${{statusBadge}}
                             ${{studentBadge}}
                             ${{levelBadge}}
-                            ${{remoteBadge}}
+                            ${{modeBadge}}
                             ${{expBadge}}
                             <span class="tag">📍 ${{job.location}}</span>
                         </div>
@@ -1027,7 +1063,7 @@ def main():
 
     jobs_data = []
     for job in all_jobs:
-        score, tags, is_early, is_student, country, is_remote, exp_text, years_num = calculate_match_details(cv_keywords, job)
+        score, tags, is_early, is_student, country, workplace_label, workplace_code, exp_text, years_num = calculate_match_details(cv_keywords, job)
         if score >= 50.0:
             jobs_data.append({
                 "company": job.get("company", "").capitalize(),
@@ -1040,7 +1076,8 @@ def main():
                 "is_early_career": is_early,
                 "is_student_intern": is_student,
                 "country": country,
-                "is_remote": is_remote,
+                "workplace_label": workplace_label,
+                "workplace_code": workplace_code,
                 "exp_text": exp_text,
                 "years_num": years_num
             })
@@ -1052,7 +1089,7 @@ def main():
     output_path.write_text(html, encoding="utf-8")
 
     print("==========================================================")
-    print(" 🚀 TRACKER DASHBOARD GENERATED: job_dashboard.html       ")
+    print(" 🚀 REFINED HYBRID/REMOTE DASHBOARD: job_dashboard.html   ")
     print("==========================================================\n")
     print(f"Opening dashboard in your web browser...")
     webbrowser.open(f"file://{output_path.resolve()}")

@@ -11,9 +11,15 @@ SIMPLIFY_SOURCES = [
     "https://raw.githubusercontent.com/SimplifyJobs/Summer2025-Internships/dev/.github/scripts/listings.json",
 ]
 
+MANUAL_COMPANY_SLUGS = {
+    "griffin", "ramp", "brex", "linear", "vanta", "multiverse", "synthesia",
+    "elevenlabs", "mistral", "cohere", "qdrant", "figma", "retool", "resend",
+    "posthog", "checkly", "fly-io", "render", "clerk", "dub", "cal-com"
+}
+
 
 async def discover_company_slugs():
-    slugs = set()
+    slugs = set(MANUAL_COMPANY_SLUGS)
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
         for url in SIMPLIFY_SOURCES:
             try:
@@ -811,7 +817,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
         <div class="filter-panel">
             <div class="search-row">
                 <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="Search by title, company, skill, city, department (e.g. Intern, Placement, SDR, London, Python, Finance)..." oninput="renderFilteredJobs()">
+                    <input type="text" id="searchInput" placeholder="Search by title, company, skill, city, department (e.g. Griffin, Intern, Placement, SDR, London)..." oninput="renderFilteredJobs()">
                 </div>
                 <select id="sortSelect" class="sort-select" onchange="renderFilteredJobs()">
                     <option value="score-desc">Sort: Highest Match Score</option>
@@ -867,10 +873,10 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
                 <div>
                     <div class="filter-group-title">Minimum Match Percentage</div>
                     <div class="tag-group" id="scoreChips">
-                        <span class="filter-chip active" data-score="50" onclick="toggleScoreFilter(50, this)">All Matches (50%+)</span>
-                        <span class="filter-chip" data-score="65" onclick="toggleScoreFilter(65, this)">65%+ Match</span>
-                        <span class="filter-chip" data-score="75" onclick="toggleScoreFilter(75, this)">75%+ Match</span>
-                        <span class="filter-chip" data-score="85" onclick="toggleScoreFilter(85, this)">85%+ Match</span>
+                        <span class="filter-chip active" data-score="0" onclick="toggleScoreFilter(0, this)">All Matches (0%+)</span>
+                        <span class="filter-chip" data-score="35" onclick="toggleScoreFilter(35, this)">35%+ Match</span>
+                        <span class="filter-chip" data-score="50" onclick="toggleScoreFilter(50, this)">50%+ Match</span>
+                        <span class="filter-chip" data-score="70" onclick="toggleScoreFilter(70, this)">70%+ Match</span>
                         <button class="clear-btn" onclick="resetAllFilters()">Reset All Filters</button>
                     </div>
                 </div>
@@ -905,7 +911,7 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
         let activeCountry = 'all';
         let activeRemote = 'all';
         let activeDept = 'all';
-        let minScore = 50;
+        let minScore = 0;
         let activeJobId = null;
 
         function getJobStatusMap() {{
@@ -996,14 +1002,14 @@ def build_dashboard_html(jobs_data: list, total_companies: int, total_jobs: int)
             activeStage = 'entry';
             activeCountry = 'all';
             activeRemote = 'all';
-            minScore = 50;
+            minScore = 0;
 
             document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active', 'active-green'));
             document.querySelector('#langChips [data-lang="matched"]').classList.add('active-green');
             document.querySelector('#stageChips [data-stage="entry"]').classList.add('active-green');
             document.querySelector('#countryChips [data-country="all"]').classList.add('active');
             document.querySelector('#remoteChips [data-remote="all"]').classList.add('active');
-            document.querySelector('#scoreChips [data-score="50"]').classList.add('active');
+            document.querySelector('#scoreChips [data-score="0"]').classList.add('active');
 
             renderFilteredJobs();
         }}
@@ -1167,25 +1173,24 @@ def main():
     jobs_data = []
     for job in all_jobs:
         score, tags, country, workplace_label, workplace_code, exp_text, years_num, stage_label, stage_code, stage_badge, unsupported_langs = calculate_match_details(cv_keywords, user_languages, job)
-        if score >= 50.0:
-            jobs_data.append({
-                "company": job.get("company", "").capitalize(),
-                "title": job.get("title"),
-                "department": job.get("department") or "General",
-                "location": str(job.get("location") or "Unspecified"),
-                "url": job.get("jobUrl"),
-                "score": score,
-                "matched_tags": tags,
-                "country": country,
-                "workplace_label": workplace_label,
-                "workplace_code": workplace_code,
-                "exp_text": exp_text,
-                "years_num": years_num,
-                "stage_label": stage_label,
-                "stage_code": stage_code,
-                "stage_badge": stage_badge,
-                "unsupported_langs": unsupported_langs
-            })
+        jobs_data.append({
+            "company": job.get("company", "").capitalize(),
+            "title": job.get("title"),
+            "department": job.get("department") or "General",
+            "location": str(job.get("location") or "Unspecified"),
+            "url": job.get("jobUrl"),
+            "score": score,
+            "matched_tags": tags,
+            "country": country,
+            "workplace_label": workplace_label,
+            "workplace_code": workplace_code,
+            "exp_text": exp_text,
+            "years_num": years_num,
+            "stage_label": stage_label,
+            "stage_code": stage_code,
+            "stage_badge": stage_badge,
+            "unsupported_langs": unsupported_langs
+        })
 
     jobs_data.sort(key=lambda x: x["score"], reverse=True)
 
